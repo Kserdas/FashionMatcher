@@ -17,10 +17,11 @@
     .tab-content.active { display: block; }
     .card { background: var(--card); border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 16px; }
     .btn { display: inline-block; width: 100%; padding: 12px; border: none; border-radius: 8px; background: var(--accent); color: white; font-weight: 600; text-align: center; cursor: pointer; box-sizing: border-box; }
+    .btn-delete { background: #ef4444; margin-top: 6px; }
     .slider-group { margin-bottom: 10px; }
     .slider-group label { display: flex; justify-content: space-between; font-size: 13px; font-weight: 500; margin-bottom: 2px; }
     .slider-group input[type=range] { width: 100%; }
-    .img-preview { width: 100%; max-height: 220px; object-fit: cover; border-radius: 8px; margin-bottom: 12px; }
+    .img-preview { width: 100%; max-height: 240px; object-fit: contain; border-radius: 8px; margin-bottom: 12px; background: #eee; }
     .match-card { display: flex; flex-direction: column; gap: 8px; }
     .outfit-row { display: flex; gap: 8px; overflow-x: auto; }
     .outfit-item { flex: 1; text-align: center; }
@@ -41,7 +42,7 @@
     /* Closet Grid */
     .closet-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .closet-item { background: #fff; border-radius: 8px; padding: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); text-align: center; }
-    .closet-item img { width: 100%; height: 120px; object-fit: cover; border-radius: 6px; margin-bottom: 8px; }
+    .closet-item img { width: 100%; height: 130px; object-fit: cover; border-radius: 6px; margin-bottom: 8px; }
     .closet-item button { padding: 6px; width: 100%; border: none; border-radius: 4px; background: #e5e7eb; font-size: 12px; font-weight: bold; cursor: pointer; }
   </style>
 </head>
@@ -49,8 +50,8 @@
 
   <div class="nav">
     <button id="tabOutfitsBtn" class="active" onclick="showTab('outfitsTab')">Outfits</button>
-    <button id="tabAddBtn" onclick="showTab('addTab')">Add</button>
-    <button id="tabClosetBtn" onclick="showTab('closetTab'); loadCloset();">Closet</button>
+    <button id="tabAddBtn" onclick="showTab('addTab')">Add Clothes</button>
+    <button id="tabClosetBtn" onclick="showTab('closetTab')">My Closet</button>
   </div>
 
   <!-- OUTFITS SCREEN -->
@@ -59,7 +60,7 @@
     <div id="matchesContainer"></div>
   </div>
 
-  <!-- CLOSET SCREEN (View & Edit) -->
+  <!-- CLOSET SCREEN -->
   <div id="closetTab" class="tab-content">
     <h2>My Saved Clothes</h2>
     <div id="closetContainer" class="closet-grid"></div>
@@ -69,8 +70,7 @@
   <div id="addTab" class="tab-content">
     <div class="card" id="uploadSection">
       <h2>1. Snap / Select Photos</h2>
-      <!-- Hardcode your key here if you want to hide this input -->
-      <input type="text" id="geminiKey" placeholder="Gemini API Key" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 10px; box-sizing: border-box;" />
+      <input type="text" id="geminiKey" placeholder="Gemini API Key (saved automatically)" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 10px; box-sizing: border-box;" onchange="saveApiKey()" />
       <input type="file" id="photoInput" accept="image/*" multiple style="margin-bottom: 12px;" onchange="handleFileSelect(event)" />
       <div id="queueStatus" style="font-size: 13px; color: #6b7280; margin-bottom: 8px;"></div>
     </div>
@@ -126,7 +126,7 @@
       </div>
 
       <button class="btn" id="saveBtn" onclick="saveCurrentGarment()">Save to Wardrobe & Next</button>
-      <button class="btn" id="cancelEditBtn" style="display:none; background:#ef4444; margin-top:8px;" onclick="cancelEdit()">Cancel Edit</button>
+      <button class="btn btn-delete" id="cancelEditBtn" style="display:none;" onclick="cancelEdit()">Cancel Edit</button>
     </div>
   </div>
 
@@ -134,19 +134,29 @@
   <script>
     let engine = null;
     let uploadQueue = [];
-    let currentUploadItem = null;
+    let activeImageBase64 = null;
     let editingId = null; 
 
-    window.onload = () => {
+    window.addEventListener('DOMContentLoaded', () => {
       const savedKey = localStorage.getItem("gemini_api_key");
       if (savedKey) {
         document.getElementById('geminiKey').value = savedKey;
       }
+    });
+
+    Module.onRuntimeInitialized = () => { 
+      engine = Module; 
+      console.log("C++ Wasm Engine ready");
     };
-    Module.onRuntimeInitialized = () => { engine = Module; };
 
-    Module.onRuntimeInitialized = () => { engine = Module; };
+    function saveApiKey() {
+      const currentKey = document.getElementById('geminiKey').value.trim();
+      if (currentKey) {
+        localStorage.setItem("gemini_api_key", currentKey);
+      }
+    }
 
+    // --- IndexedDB Storage ---
     function openDB() {
       return new Promise((resolve, reject) => {
         const req = indexedDB.open("WardrobeDB", 1);
@@ -166,7 +176,11 @@
       return new Promise((resolve, reject) => {
         const tx = db.transaction("garments", "readwrite");
         const store = tx.objectStore("garments");
-        editingId ? store.put(garment) : store.add(garment);
+        if (editingId) {
+          store.put(garment);
+        } else {
+          store.add(garment);
+        }
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
       });
@@ -188,14 +202,36 @@
         const tx = db.transaction("garments", "readonly");
         const req = tx.objectStore("garments").get(id);
         req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
       });
     }
 
+    async function dbDelete(id) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("garments", "readwrite");
+        const store = tx.objectStore("garments");
+        store.delete(id);
+        tx.oncomplete = () => {
+          loadCloset();
+          resolve();
+        };
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    // --- UI Navigation ---
     function showTab(tabId) {
       document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
       document.querySelectorAll('.nav button').forEach(el => el.classList.remove('active'));
       document.getElementById(tabId).classList.add('active');
-      document.getElementById('tab' + tabId.replace('Tab', '') + 'Btn').classList.add('active');
+      
+      if (tabId === 'outfitsTab') document.getElementById('tabOutfitsBtn').classList.add('active');
+      if (tabId === 'addTab') document.getElementById('tabAddBtn').classList.add('active');
+      if (tabId === 'closetTab') {
+        document.getElementById('tabClosetBtn').classList.add('active');
+        loadCloset();
+      }
     }
 
     function updateLbl(name, val) {
@@ -214,42 +250,24 @@
         id === 'color' ? updateColorPreview(val) : updateLbl(id, val);
       }
     }
-function showTab(tabId) {
-      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-      document.querySelectorAll('.nav button').forEach(el => el.classList.remove('active'));
-      document.getElementById(tabId).classList.add('active');
-      document.getElementById('tab' + tabId.replace('Tab', '') + 'Btn').classList.add('active');
-    }
-    // BATCH UPLOAD
+
+    // --- Upload Handling ---
     async function handleFileSelect(e) {
       const files = Array.from(e.target.files);
       if (!files.length) return;
+
+      saveApiKey();
+
       uploadQueue = [];
       for (const file of files) {
         const base64 = await fileToBase64(file);
-        uploadQueue.push({ base64 });
-      }
-      processNextInQueue();
-    }
-    async function handleFileSelect(e) {
-      const files = Array.from(e.target.files);
-      if (!files.length) return;
-
-    const currentKey = document.getElementById('geminiKey').value.trim();
-      if (currentKey) {
-        localStorage.setItem("gemini_api_key", currentKey);
-      }
-
-    uploadQueue = [];
-      for (const file of files) {
-        const base64 = await fileToBase64(file);
-        uploadQueue.push({ base64 });
+        uploadQueue.push(base64);
       }
       processNextInQueue();
     }
 
     function fileToBase64(file) {
-      return new Promise(resolve => {
+      return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result);
         reader.readAsDataURL(file);
@@ -259,24 +277,26 @@ function showTab(tabId) {
     async function processNextInQueue() {
       if (uploadQueue.length === 0) {
         document.getElementById('reviewCard').style.display = 'none';
-        document.getElementById('queueStatus').textContent = "All garments processed!";
+        document.getElementById('queueStatus').textContent = "✓ All selected garments saved!";
+        activeImageBase64 = null;
         return;
       }
 
-      currentUploadItem = uploadQueue.shift();
-      editingId = null; // Ensure we are in "Add" mode
-      document.getElementById('queueStatus').textContent = `Remaining in queue: ${uploadQueue.length}`;
-      document.getElementById('reviewImg').src = currentUploadItem.base64;
+      activeImageBase64 = uploadQueue.shift();
+      editingId = null;
+
+      document.getElementById('queueStatus').textContent = `Remaining in queue: ${uploadQueue.length + 1}`;
+      document.getElementById('reviewImg').src = activeImageBase64;
       document.getElementById('reviewTitle').textContent = "Review Attributes";
       document.getElementById('saveBtn').textContent = "Save to Wardrobe & Next";
       document.getElementById('cancelEditBtn').style.display = "none";
       document.getElementById('uploadSection').style.display = "block";
-      document.getElementById('reviewCard').style.display = 'block';
+      document.getElementById('reviewCard').style.display = "block";
 
       const apiKey = document.getElementById('geminiKey').value.trim();
       if (apiKey) {
-        document.getElementById('queueStatus').textContent += " (Auto-tagging...)";
-        await callGeminiVision(currentUploadItem.base64, apiKey);
+        document.getElementById('queueStatus').textContent = `Auto-tagging with Gemini... (${uploadQueue.length + 1} remaining)`;
+        await callGeminiVision(activeImageBase64, apiKey);
       }
     }
 
@@ -288,7 +308,7 @@ function showTab(tabId) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [
-              { text: "Analyze garment for fashion matching. Respond strictly in valid JSON: {type: 'top'|'bottom'|'jacket', color: 0-360, formal: 0.0-1.0, thermal: -1.0-1.0, silhouette: -1.0-1.0, pattern: 0.0-1.0, texture: 0.0-1.0, weight: 0.0-1.0}" },
+              { text: "Analyze garment for fashion matching. Respond strictly in valid JSON: {\"type\": \"top\"|\"bottom\"|\"jacket\", \"color\": 0-360, \"formal\": 0.0-1.0, \"thermal\": -1.0-1.0, \"silhouette\": -1.0-1.0, \"pattern\": 0.0-1.0, \"texture\": 0.0-1.0, \"weight\": 0.0-1.0}" },
               { inlineData: { mimeType: "image/jpeg", data: rawBase64 } }
             ]}]
           })
@@ -299,20 +319,22 @@ function showTab(tabId) {
         const parsed = JSON.parse(text);
 
         document.getElementById('trait_type').value = parsed.type || 'top';
-        setVal('color', parsed.color || 0);
-        setVal('formal', parsed.formal || 0.5);
-        setVal('thermal', parsed.thermal || 0.0);
-        setVal('silhouette', parsed.silhouette || 0.0);
-        setVal('pattern', parsed.pattern || 0.0);
-        setVal('texture', parsed.texture || 0.2);
-        setVal('weight', parsed.weight || 0.3);
-      } catch (err) { console.warn("AI Tagging failed", err); }
+        setVal('color', Math.round(parsed.color || 0));
+        setVal('formal', parsed.formal ?? 0.5);
+        setVal('thermal', parsed.thermal ?? 0.0);
+        setVal('silhouette', parsed.silhouette ?? 0.0);
+        setVal('pattern', parsed.pattern ?? 0.0);
+        setVal('texture', parsed.texture ?? 0.2);
+        setVal('weight', parsed.weight ?? 0.3);
+      } catch (err) { 
+        console.warn("AI Tagging fallback to defaults:", err); 
+      }
     }
 
     async function saveCurrentGarment() {
       const gType = document.getElementById('trait_type').value;
       const garmentRecord = {
-        image: document.getElementById('reviewImg').src,
+        image: activeImageBase64 || document.getElementById('reviewImg').src,
         category: (gType === 'jacket' || gType === 'top') ? 'top' : 'bottom',
         z: gType === 'jacket' ? 2 : (gType === 'top' ? 1 : 0),
         archetype: gType,
@@ -331,24 +353,31 @@ function showTab(tabId) {
       await dbSave(garmentRecord);
       
       if (editingId) {
-        cancelEdit(); // Return to closet
+        cancelEdit();
       } else {
         processNextInQueue();
       }
     }
 
-    // CLOSET EDITING
+    // --- Closet Rendering & Editing ---
     async function loadCloset() {
       const garments = await dbGetAll();
       const container = document.getElementById('closetContainer');
       container.innerHTML = "";
+
+      if (garments.length === 0) {
+        container.innerHTML = "<p style='grid-column: 1 / -1; color:#6b7280;'>Your closet is empty! Go to 'Add Clothes' to upload photos.</p>";
+        return;
+      }
+
       garments.forEach(g => {
         const div = document.createElement('div');
         div.className = 'closet-item';
         div.innerHTML = `
           <img src="${g.image}" />
-          <div style="font-size:11px; margin-bottom:4px;">${g.archetype.toUpperCase()}</div>
+          <div style="font-size:12px; font-weight: bold; margin-bottom:4px;">${g.archetype.toUpperCase()}</div>
           <button onclick="editGarment(${g.id})">Edit Traits</button>
+          <button class="btn-delete" style="color:white;" onclick="dbDelete(${g.id})">Delete</button>
         `;
         container.appendChild(div);
       });
@@ -357,12 +386,13 @@ function showTab(tabId) {
     async function editGarment(id) {
       const g = await dbGetOne(id);
       editingId = id;
+      activeImageBase64 = g.image;
       showTab('addTab');
       
       document.getElementById('uploadSection').style.display = "none";
       document.getElementById('reviewCard').style.display = "block";
-      document.getElementById('reviewTitle').textContent = "Edit Garment";
-      document.getElementById('saveBtn').textContent = "Update Garment";
+      document.getElementById('reviewTitle').textContent = "Edit Garment #" + g.id;
+      document.getElementById('saveBtn').textContent = "Save Changes";
       document.getElementById('cancelEditBtn').style.display = "block";
       document.getElementById('reviewImg').src = g.image;
 
@@ -378,13 +408,13 @@ function showTab(tabId) {
 
     function cancelEdit() {
       editingId = null;
+      activeImageBase64 = null;
       document.getElementById('reviewCard').style.display = "none";
       document.getElementById('uploadSection').style.display = "block";
       showTab('closetTab');
-      loadCloset();
     }
 
-    // OUTFIT GENERATION (Unchanged from previous logic)
+    // --- Outfit Matching ---
     async function generateOutfits() {
       if (!engine) return alert("Engine loading...");
       const allGarments = await dbGetAll();
@@ -395,24 +425,38 @@ function showTab(tabId) {
       let matches = [];
 
       for (const b of bottoms) {
-        const btmObj = new engine.Bottom(b.neckline, b.sleeve, b.length, b.waist, b.silhouette, b.color, b.temp, b.reflect, b.weight, b.rigid, b.texture, b.pattern, b.hardware, b.formal, b.archetype, b.z, b.thermal);
+        const btmObj = new engine.Bottom(
+          b.neckline, b.sleeve, b.length, b.waist, b.silhouette,
+          b.color, b.temp, b.reflect, b.weight, b.rigid, b.texture,
+          b.pattern, b.hardware, b.formal, b.archetype, b.z, b.thermal
+        );
+
         for (const t of tops) {
           if (t.z !== 1) continue; 
-          const topObj = new engine.Top(t.neckline, t.sleeve, t.length, t.waist, t.silhouette, t.color, t.temp, t.reflect, t.weight, t.rigid, t.texture, t.pattern, t.hardware, t.formal, t.archetype, t.z, t.thermal);
+          const topObj = new engine.Top(
+            t.neckline, t.sleeve, t.length, t.waist, t.silhouette,
+            t.color, t.temp, t.reflect, t.weight, t.rigid, t.texture,
+            t.pattern, t.hardware, t.formal, t.archetype, t.z, t.thermal
+          );
           
           const score2 = engine.calculate_compatibility(topObj, btmObj, null);
-          if (score2 >= 0.6) matches.push({ inner: t, jacket: null, bottom: b, score: score2 });
+          if (score2 >= 0.5) matches.push({ inner: t, jacket: null, bottom: b, score: score2 });
 
           for (const j of tops) {
             if (j.z !== 2) continue;
-            const jktObj = new engine.Top(j.neckline, j.sleeve, j.length, j.waist, j.silhouette, j.color, j.temp, j.reflect, j.weight, j.rigid, j.texture, j.pattern, j.hardware, j.formal, j.archetype, j.z, j.thermal);
+            const jktObj = new engine.Top(
+              j.neckline, j.sleeve, j.length, j.waist, j.silhouette,
+              j.color, j.temp, j.reflect, j.weight, j.rigid, j.texture,
+              j.pattern, j.hardware, j.formal, j.archetype, j.z, j.thermal
+            );
             const score3 = engine.calculate_compatibility(topObj, btmObj, jktObj);
-            if (score3 >= 0.6) matches.push({ inner: t, jacket: j, bottom: b, score: score3 });
+            if (score3 >= 0.5) matches.push({ inner: t, jacket: j, bottom: b, score: score3 });
           }
         }
       }
 
       matches.sort((a, b) => b.score - a.score);
+
       if (matches.length === 0) {
         container.innerHTML = "<p style='color:#6b7280;'>No high-scoring outfits found. Try adding more tops and bottoms!</p>";
         return;
