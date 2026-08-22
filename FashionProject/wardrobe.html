@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Smart Wardrobe</title>
+  <style>
+    :root { --bg: #f7f7f9; --card: #ffffff; --primary: #111827; --accent: #4f46e5; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); margin: 0; padding: 16px; color: #1f2937; }
+    h1, h2 { margin: 0 0 12px 0; font-size: 20px; }
+    .nav { display: flex; gap: 8px; margin-bottom: 16px; }
+    .nav button { flex: 1; padding: 10px; border: none; border-radius: 8px; background: #e5e7eb; font-weight: 600; cursor: pointer; }
+    .nav button.active { background: var(--primary); color: #fff; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .card { background: var(--card); border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 16px; }
+    .btn { display: inline-block; width: 100%; padding: 12px; border: none; border-radius: 8px; background: var(--accent); color: white; font-weight: 600; text-align: center; cursor: pointer; box-sizing: border-box; }
+    .slider-group { margin-bottom: 10px; }
+    .slider-group label { display: flex; justify-content: space-between; font-size: 13px; font-weight: 500; margin-bottom: 2px; }
+    .slider-group input[type=range] { width: 100%; }
+    .img-preview { width: 100%; max-height: 220px; object-fit: cover; border-radius: 8px; margin-bottom: 12px; }
+    .match-card { display: flex; flex-direction: column; gap: 8px; }
+    .outfit-row { display: flex; gap: 8px; overflow-x: auto; }
+    .outfit-item { flex: 1; text-align: center; }
+    .outfit-item img { width: 100%; height: 140px; object-fit: cover; border-radius: 8px; }
+    .score-badge { align-self: flex-start; padding: 4px 8px; background: #ecfdf5; color: #065f46; font-weight: 700; border-radius: 6px; font-size: 13px; }
+    
+    /* Color Slider & Swatch */
+    #trait_color {
+      -webkit-appearance: none; appearance: none; height: 14px; border-radius: 7px; outline: none;
+      background: linear-gradient(to right, hsl(0, 100%, 50%), hsl(60, 100%, 50%), hsl(120, 100%, 50%), hsl(180, 100%, 50%), hsl(240, 100%, 50%), hsl(300, 100%, 50%), hsl(360, 100%, 50%));
+    }
+    #trait_color::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none; width: 22px; height: 22px; border-radius: 50%;
+      background: #ffffff; border: 2px solid #1f2937; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    }
+    .color-preview-box { width: 20px; height: 20px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.15); display: inline-block; vertical-align: middle; margin-left: 6px; background-color: hsl(0, 100%, 50%); }
+    
+    /* Closet Grid */
+    .closet-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .closet-item { background: #fff; border-radius: 8px; padding: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); text-align: center; }
+    .closet-item img { width: 100%; height: 120px; object-fit: cover; border-radius: 6px; margin-bottom: 8px; }
+    .closet-item button { padding: 6px; width: 100%; border: none; border-radius: 4px; background: #e5e7eb; font-size: 12px; font-weight: bold; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+  <div class="nav">
+    <button id="tabOutfitsBtn" class="active" onclick="showTab('outfitsTab')">Outfits</button>
+    <button id="tabAddBtn" onclick="showTab('addTab')">Add</button>
+    <button id="tabClosetBtn" onclick="showTab('closetTab'); loadCloset();">Closet</button>
+  </div>
+
+  <!-- OUTFITS SCREEN -->
+  <div id="outfitsTab" class="tab-content active">
+    <button class="btn" style="margin-bottom: 16px;" onclick="generateOutfits()">✨ Generate Outfits</button>
+    <div id="matchesContainer"></div>
+  </div>
+
+  <!-- CLOSET SCREEN (View & Edit) -->
+  <div id="closetTab" class="tab-content">
+    <h2>My Saved Clothes</h2>
+    <div id="closetContainer" class="closet-grid"></div>
+  </div>
+
+  <!-- ADD / EDIT CLOTHES SCREEN -->
+  <div id="addTab" class="tab-content">
+    <div class="card" id="uploadSection">
+      <h2>1. Snap / Select Photos</h2>
+      <!-- Hardcode your key here if you want to hide this input -->
+      <input type="text" id="geminiKey" placeholder="Gemini API Key" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 10px; box-sizing: border-box;" />
+      <input type="file" id="photoInput" accept="image/*" multiple style="margin-bottom: 12px;" onchange="handleFileSelect(event)" />
+      <div id="queueStatus" style="font-size: 13px; color: #6b7280; margin-bottom: 8px;"></div>
+    </div>
+
+    <!-- REVIEW CARD -->
+    <div id="reviewCard" class="card" style="display: none;">
+      <h2 id="reviewTitle">Review Attributes</h2>
+      <img id="reviewImg" class="img-preview" src="" alt="Preview" />
+      
+      <div class="slider-group">
+        <label>Type: 
+          <select id="trait_type">
+            <option value="top">Top / Shirt</option>
+            <option value="jacket">Jacket / Outerwear (z=2)</option>
+            <option value="bottom">Bottom / Pants / Skirt</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="slider-group">
+        <label><span>Color Hue</span><span style="display: flex; align-items: center;"><span id="lbl_color">0°</span><span id="color_swatch" class="color-preview-box"></span></span></label>
+        <input type="range" id="trait_color" min="0" max="360" value="0" oninput="updateColorPreview(this.value)">
+      </div>
+
+      <div class="slider-group">
+        <label><span>Formality (Casual → Formal)</span><span id="lbl_formal">0.5</span></label>
+        <input type="range" id="trait_formal" min="0" max="1" step="0.05" value="0.5" oninput="updateLbl('formal', this.value)">
+      </div>
+
+      <div class="slider-group">
+        <label><span>Season / Warmth (Summer → Winter)</span><span id="lbl_thermal">0.0</span></label>
+        <input type="range" id="trait_thermal" min="-1" max="1" step="0.1" value="0.0" oninput="updateLbl('thermal', this.value)">
+      </div>
+
+      <div class="slider-group">
+        <label><span>Silhouette (Fitted → Oversized)</span><span id="lbl_silhouette">0.0</span></label>
+        <input type="range" id="trait_silhouette" min="-1" max="1" step="0.1" value="0.0" oninput="updateLbl('silhouette', this.value)">
+      </div>
+
+      <div class="slider-group">
+        <label><span>Pattern Loudness (Solid → Busy)</span><span id="lbl_pattern">0.0</span></label>
+        <input type="range" id="trait_pattern" min="0" max="1" step="0.05" value="0.0" oninput="updateLbl('pattern', this.value)">
+      </div>
+
+      <div class="slider-group">
+        <label><span>Texture Roughness (Smooth → Rough)</span><span id="lbl_texture">0.2</span></label>
+        <input type="range" id="trait_texture" min="0" max="1" step="0.05" value="0.2" oninput="updateLbl('texture', this.value)">
+      </div>
+
+      <div class="slider-group">
+        <label><span>Fabric Weight (Light → Heavy)</span><span id="lbl_weight">0.3</span></label>
+        <input type="range" id="trait_weight" min="0" max="1" step="0.05" value="0.3" oninput="updateLbl('weight', this.value)">
+      </div>
+
+      <button class="btn" id="saveBtn" onclick="saveCurrentGarment()">Save to Wardrobe & Next</button>
+      <button class="btn" id="cancelEditBtn" style="display:none; background:#ef4444; margin-top:8px;" onclick="cancelEdit()">Cancel Edit</button>
+    </div>
+  </div>
+
+  <script src="wardrobe.js"></script>
+  <script>
+    let engine = null;
+    let uploadQueue = [];
+    let currentUploadItem = null;
+    let editingId = null; 
+
+    window.onload = () => {
+      const savedKey = localStorage.getItem("gemini_api_key");
+      if (savedKey) {
+        document.getElementById('geminiKey').value = savedKey;
+      }
+    };
+    Module.onRuntimeInitialized = () => { engine = Module; };
+
+    Module.onRuntimeInitialized = () => { engine = Module; };
+
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open("WardrobeDB", 1);
+        req.onupgradeneeded = e => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains("garments")) {
+            db.createObjectStore("garments", { keyPath: "id", autoIncrement: true });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function dbSave(garment) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("garments", "readwrite");
+        const store = tx.objectStore("garments");
+        editingId ? store.put(garment) : store.add(garment);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function dbGetAll() {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("garments", "readonly");
+        const req = tx.objectStore("garments").getAll();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function dbGetOne(id) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction("garments", "readonly");
+        const req = tx.objectStore("garments").get(id);
+        req.onsuccess = () => resolve(req.result);
+      });
+    }
+
+    function showTab(tabId) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav button').forEach(el => el.classList.remove('active'));
+      document.getElementById(tabId).classList.add('active');
+      document.getElementById('tab' + tabId.replace('Tab', '') + 'Btn').classList.add('active');
+    }
+
+    function updateLbl(name, val) {
+      document.getElementById('lbl_' + name).textContent = val;
+    }
+
+    function updateColorPreview(hueVal) {
+      document.getElementById('lbl_color').textContent = `${hueVal}°`;
+      document.getElementById('color_swatch').style.backgroundColor = `hsl(${hueVal}, 100%, 50%)`;
+    }
+
+    function setVal(id, val) {
+      const el = document.getElementById('trait_' + id);
+      if (el) { 
+        el.value = val; 
+        id === 'color' ? updateColorPreview(val) : updateLbl(id, val);
+      }
+    }
+function showTab(tabId) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav button').forEach(el => el.classList.remove('active'));
+      document.getElementById(tabId).classList.add('active');
+      document.getElementById('tab' + tabId.replace('Tab', '') + 'Btn').classList.add('active');
+    }
+    // BATCH UPLOAD
+    async function handleFileSelect(e) {
+      const files = Array.from(e.target.files);
+      if (!files.length) return;
+      uploadQueue = [];
+      for (const file of files) {
+        const base64 = await fileToBase64(file);
+        uploadQueue.push({ base64 });
+      }
+      processNextInQueue();
+    }
+    async function handleFileSelect(e) {
+      const files = Array.from(e.target.files);
+      if (!files.length) return;
+
+    const currentKey = document.getElementById('geminiKey').value.trim();
+      if (currentKey) {
+        localStorage.setItem("gemini_api_key", currentKey);
+      }
+
+    uploadQueue = [];
+      for (const file of files) {
+        const base64 = await fileToBase64(file);
+        uploadQueue.push({ base64 });
+      }
+      processNextInQueue();
+    }
+
+    function fileToBase64(file) {
+      return new Promise(resolve => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function processNextInQueue() {
+      if (uploadQueue.length === 0) {
+        document.getElementById('reviewCard').style.display = 'none';
+        document.getElementById('queueStatus').textContent = "All garments processed!";
+        return;
+      }
+
+      currentUploadItem = uploadQueue.shift();
+      editingId = null; // Ensure we are in "Add" mode
+      document.getElementById('queueStatus').textContent = `Remaining in queue: ${uploadQueue.length}`;
+      document.getElementById('reviewImg').src = currentUploadItem.base64;
+      document.getElementById('reviewTitle').textContent = "Review Attributes";
+      document.getElementById('saveBtn').textContent = "Save to Wardrobe & Next";
+      document.getElementById('cancelEditBtn').style.display = "none";
+      document.getElementById('uploadSection').style.display = "block";
+      document.getElementById('reviewCard').style.display = 'block';
+
+      const apiKey = document.getElementById('geminiKey').value.trim();
+      if (apiKey) {
+        document.getElementById('queueStatus').textContent += " (Auto-tagging...)";
+        await callGeminiVision(currentUploadItem.base64, apiKey);
+      }
+    }
+
+    async function callGeminiVision(base64Data, apiKey) {
+      try {
+        const rawBase64 = base64Data.split(',')[1];
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [
+              { text: "Analyze garment for fashion matching. Respond strictly in valid JSON: {type: 'top'|'bottom'|'jacket', color: 0-360, formal: 0.0-1.0, thermal: -1.0-1.0, silhouette: -1.0-1.0, pattern: 0.0-1.0, texture: 0.0-1.0, weight: 0.0-1.0}" },
+              { inlineData: { mimeType: "image/jpeg", data: rawBase64 } }
+            ]}]
+          })
+        });
+
+        const data = await res.json();
+        const text = data.candidates[0].content.parts[0].text.replace(/```json|```/g, '').trim();
+        const parsed = JSON.parse(text);
+
+        document.getElementById('trait_type').value = parsed.type || 'top';
+        setVal('color', parsed.color || 0);
+        setVal('formal', parsed.formal || 0.5);
+        setVal('thermal', parsed.thermal || 0.0);
+        setVal('silhouette', parsed.silhouette || 0.0);
+        setVal('pattern', parsed.pattern || 0.0);
+        setVal('texture', parsed.texture || 0.2);
+        setVal('weight', parsed.weight || 0.3);
+      } catch (err) { console.warn("AI Tagging failed", err); }
+    }
+
+    async function saveCurrentGarment() {
+      const gType = document.getElementById('trait_type').value;
+      const garmentRecord = {
+        image: document.getElementById('reviewImg').src,
+        category: (gType === 'jacket' || gType === 'top') ? 'top' : 'bottom',
+        z: gType === 'jacket' ? 2 : (gType === 'top' ? 1 : 0),
+        archetype: gType,
+        color: parseFloat(document.getElementById('trait_color').value),
+        formal: parseFloat(document.getElementById('trait_formal').value),
+        thermal: parseFloat(document.getElementById('trait_thermal').value),
+        silhouette: parseFloat(document.getElementById('trait_silhouette').value),
+        pattern: parseFloat(document.getElementById('trait_pattern').value),
+        texture: parseFloat(document.getElementById('trait_texture').value),
+        weight: parseFloat(document.getElementById('trait_weight').value),
+        neckline: 0.5, sleeve: 0.0, length: 0.0, waist: 0.0, temp: 0.0, reflect: 0.0, rigid: 0.0, hardware: 0.0
+      };
+
+      if (editingId) garmentRecord.id = editingId;
+
+      await dbSave(garmentRecord);
+      
+      if (editingId) {
+        cancelEdit(); // Return to closet
+      } else {
+        processNextInQueue();
+      }
+    }
+
+    // CLOSET EDITING
+    async function loadCloset() {
+      const garments = await dbGetAll();
+      const container = document.getElementById('closetContainer');
+      container.innerHTML = "";
+      garments.forEach(g => {
+        const div = document.createElement('div');
+        div.className = 'closet-item';
+        div.innerHTML = `
+          <img src="${g.image}" />
+          <div style="font-size:11px; margin-bottom:4px;">${g.archetype.toUpperCase()}</div>
+          <button onclick="editGarment(${g.id})">Edit Traits</button>
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    async function editGarment(id) {
+      const g = await dbGetOne(id);
+      editingId = id;
+      showTab('addTab');
+      
+      document.getElementById('uploadSection').style.display = "none";
+      document.getElementById('reviewCard').style.display = "block";
+      document.getElementById('reviewTitle').textContent = "Edit Garment";
+      document.getElementById('saveBtn').textContent = "Update Garment";
+      document.getElementById('cancelEditBtn').style.display = "block";
+      document.getElementById('reviewImg').src = g.image;
+
+      document.getElementById('trait_type').value = g.archetype;
+      setVal('color', g.color);
+      setVal('formal', g.formal);
+      setVal('thermal', g.thermal);
+      setVal('silhouette', g.silhouette);
+      setVal('pattern', g.pattern);
+      setVal('texture', g.texture);
+      setVal('weight', g.weight);
+    }
+
+    function cancelEdit() {
+      editingId = null;
+      document.getElementById('reviewCard').style.display = "none";
+      document.getElementById('uploadSection').style.display = "block";
+      showTab('closetTab');
+      loadCloset();
+    }
+
+    // OUTFIT GENERATION (Unchanged from previous logic)
+    async function generateOutfits() {
+      if (!engine) return alert("Engine loading...");
+      const allGarments = await dbGetAll();
+      const tops = allGarments.filter(g => g.category === 'top');
+      const bottoms = allGarments.filter(g => g.category === 'bottom');
+      const container = document.getElementById('matchesContainer');
+      container.innerHTML = "";
+      let matches = [];
+
+      for (const b of bottoms) {
+        const btmObj = new engine.Bottom(b.neckline, b.sleeve, b.length, b.waist, b.silhouette, b.color, b.temp, b.reflect, b.weight, b.rigid, b.texture, b.pattern, b.hardware, b.formal, b.archetype, b.z, b.thermal);
+        for (const t of tops) {
+          if (t.z !== 1) continue; 
+          const topObj = new engine.Top(t.neckline, t.sleeve, t.length, t.waist, t.silhouette, t.color, t.temp, t.reflect, t.weight, t.rigid, t.texture, t.pattern, t.hardware, t.formal, t.archetype, t.z, t.thermal);
+          
+          const score2 = engine.calculate_compatibility(topObj, btmObj, null);
+          if (score2 >= 0.6) matches.push({ inner: t, jacket: null, bottom: b, score: score2 });
+
+          for (const j of tops) {
+            if (j.z !== 2) continue;
+            const jktObj = new engine.Top(j.neckline, j.sleeve, j.length, j.waist, j.silhouette, j.color, j.temp, j.reflect, j.weight, j.rigid, j.texture, j.pattern, j.hardware, j.formal, j.archetype, j.z, j.thermal);
+            const score3 = engine.calculate_compatibility(topObj, btmObj, jktObj);
+            if (score3 >= 0.6) matches.push({ inner: t, jacket: j, bottom: b, score: score3 });
+          }
+        }
+      }
+
+      matches.sort((a, b) => b.score - a.score);
+      if (matches.length === 0) {
+        container.innerHTML = "<p style='color:#6b7280;'>No high-scoring outfits found. Try adding more tops and bottoms!</p>";
+        return;
+      }
+
+      matches.forEach(m => {
+        const card = document.createElement('div');
+        card.className = 'card match-card';
+        card.innerHTML = `
+          <div class="score-badge">${(m.score * 100).toFixed(0)}% Match</div>
+          <div class="outfit-row">
+            <div class="outfit-item"><img src="${m.inner.image}" /><small>Top</small></div>
+            ${m.jacket ? `<div class="outfit-item"><img src="${m.jacket.image}" /><small>Layer</small></div>` : ''}
+            <div class="outfit-item"><img src="${m.bottom.image}" /><small>Bottom</small></div>
+          </div>`;
+        container.appendChild(card);
+      });
+    }
+  </script>
+</body>
+</html>
